@@ -19,6 +19,7 @@ import CancelablePromise, {
 } from "../utils/CancelablePromise";
 import { isPlainObject } from "../utils/Is";
 import { isAjaxError } from "../services/$AjaxError";
+import dayjs from 'dayjs';
 
 type PackageInfo = {
     downloads: number;
@@ -31,15 +32,25 @@ type SearchInfo = {
     status: "idle" | "processing" | "done" | "fail" | 'notFound';
     msg?: string;
 };
+
+enum DateFormat {
+    Search = 'YYYY-MM-DD',
+    Pick = 'YYYY-MM-DD',
+    Show = 'YYYY-MM-DD',
+}
 class NpmStatListStore {
     // @observable searchKey = "";
     // @observable searchList: PackageInfo[] = [];
     searchKey = "";
+    searchStartDate = dayjs().format(DateFormat.Search);
+    searchEndDate = dayjs().add(1, 'date').format(DateFormat.Search);
     searchList: PackageInfo[] = [];
 
     constructor() {
         extendObservable(this, {
             searchKey: this.searchKey,
+            searchStartDate: this.searchStartDate,
+            searchEndDate: this.searchEndDate,
             searchList: this.searchList,
             searchInfo: this.searchInfo,
             setSearchKey: this.setSearchKey,
@@ -63,8 +74,8 @@ class NpmStatListStore {
 
     // @action
     search(searchKey = this.searchKey) {
-        const startDate = "2020-09-01",
-            endDate = "2020-09-04",
+        const startDate = this.searchStartDate,
+            endDate = this.searchEndDate,
             searchKeys = searchKey.split(/\s|,|，/).filter(Boolean);
 
         if (isCancelablePromise(this._searchPromise)) {
@@ -98,7 +109,7 @@ class NpmStatListStore {
             )
             .catch((err: unknown) => {
                 console.log(err);
-                
+
                 if (isAjaxError(err)) {
                     if (err.$xhr.status === 404) {
                         this.setSearchInfo({ status: 'notFound', msg: `未找到${searchKey}` });
@@ -123,41 +134,95 @@ class NpmStatListStore {
         this.searchList = searchList;
     }
 
+    setSearchDate({ startDate, endDate }: { startDate?: NpmStatListStore['searchStartDate']; endDate?: NpmStatListStore['searchEndDate']}) {
+        if (startDate) 
+            this.searchStartDate = startDate;
+        if (endDate) 
+            this.searchEndDate = endDate;
+    }
+
     searchDebounce = _.debounce(this.search, 1000);
 }
 
 export default observer(function NpmStatList() {
     const store = useLocalStore(() => new NpmStatListStore());
 
-    console.log("store.searchInfo.status", store.searchInfo.status);
     return (
         <>
-            <IonDatetime
-                displayFormat={"YYYY-MM-DD"}
-                onIonChange={(e) => {
-                    console.log(e.detail.value);
-                }}
-            ></IonDatetime>
-            <ListSearchBar store={store}></ListSearchBar>
-            {store.searchInfo.status === "processing" && (
-                <IonProgressBar type="indeterminate"></IonProgressBar>
-            )}
+            <SearchToolBar store={store}></SearchToolBar>
             <List store={store}></List>
         </>
     );
 });
 
-const List = observer(function List({store}: { store: NpmStatListStore }) {
+const SearchToolBar = observer(function SearchToolBar({ store }: { store: NpmStatListStore }) {
+    const { searchInfo, searchStartDate, searchEndDate } = store;
+    return <>
+        <IonDatetime
+            placeholder={'起始日期'}
+            value={searchStartDate}
+            displayFormat={DateFormat.Show}
+            pickerFormat={DateFormat.Pick}
+            disabled={searchInfo.status === 'processing'}
+            onIonChange={(e) => {
+                const val = e.detail.value && dayjs(e.detail.value).format(DateFormat.Search);
+
+
+                console.log('startDate', val, e.detail.value);
+                if (val) {
+                    store.setSearchDate({ startDate: val });
+                    store.search();
+                }
+            }}
+        ></IonDatetime>
+        <IonDatetime
+            placeholder={'截止日期'}
+            value={searchEndDate}
+            displayFormat={DateFormat.Show}
+            pickerFormat={DateFormat.Pick}
+            disabled={searchInfo.status === 'processing'}
+            onIonChange={(e) => {
+                const val = e.detail.value && dayjs(e.detail.value).format(DateFormat.Search);
+
+
+                console.log('endDate', val, e.detail.value);
+                if (val) {
+                    store.setSearchDate({ endDate: val });
+                    store.search();
+                }
+            }}
+        ></IonDatetime>
+        <IonSearchbar
+            placeholder="请输入包名，逗号/空格分隔多个"
+            debounce={1000}
+            animated
+            value={store.searchKey}
+            disabled={searchInfo.status === 'processing'}
+            onIonChange={useCallback((e) => {
+                let val = e.detail.value || "";
+                store.setSearchKey(val);
+                store.search();
+            }, [store])}
+        ></IonSearchbar>
+    </>
+});
+
+const List = observer(function List({ store }: { store: NpmStatListStore }) {
     const { searchList, searchInfo, searchKey } = store,
         { status, msg } = searchInfo;
 
     if (status === 'fail') {
         return <IonItem color="danger">{msg}</IonItem>;
     } else if (status === 'processing') {
-        return <IonItem>{msg || '加载中...'}</IonItem>;
+        return <>
+            {store.searchInfo.status === "processing" && (
+                <IonProgressBar type="indeterminate"></IonProgressBar>
+            )}
+            <IonItem>{msg || '加载中...'}</IonItem>
+        </>;
     } else if (status === 'notFound') {
-        return <IonItem style={{color: '#ccc'}}>{msg || `未找到${searchKey}`}</IonItem>
-    } else 
+        return <IonItem style={{ color: '#ccc' }}>{msg || `未找到${searchKey}`}</IonItem>
+    } else
         return <IonList>
             {searchList.map((item, i) => {
                 return (
@@ -180,17 +245,3 @@ const List = observer(function List({store}: { store: NpmStatListStore }) {
             })}
         </IonList>
 });
-
-const ListSearchBar = observer(function ListSearchBar({store}: { store: NpmStatListStore }) {
-    return <IonSearchbar
-        placeholder="请输入包名，逗号/空格分隔多个"
-        debounce={1000}
-        animated
-        value={store.searchKey}
-        onIonChange={useCallback((e) => {
-            let val = e.detail.value || "";
-            store.setSearchKey(val);
-            store.search();
-        }, [store])}
-    ></IonSearchbar>
-})
